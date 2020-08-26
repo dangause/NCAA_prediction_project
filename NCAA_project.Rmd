@@ -1,0 +1,305 @@
+---
+title: "NCAA March Madness Predictive Algorithm"
+author: "Jacob Ellen, Dan Gause and Jacob Shashoua"
+date: "3/2/2020"
+output: html_document
+---
+
+In this project, we built models using Linear Discriminant Analysis (LCA) and a Generalized Linear Model (GLM) to predict the outcomes of NCAA March Madness mens basketball games.
+### Libraries
+```{r,  warning=FALSE, echo = FALSE, message=FALSE, results='hide'}
+if (!require("MASS")) install.packages("MASS")
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("lattice")) install.packages("lattice")
+if (!require("dplyr")) install.packages("dplyr")
+library(MASS)
+library(tidyverse)
+library(dplyr)
+library(lattice)
+```
+
+### Datasets
+
+FIrst, we had to collect, clean, and organize our data. All of these datasets come from Kaggle, but we merged based on the set Team ID and the season in order to get the largest amount of features we could to test them out.
+
+```{r}
+ results <- read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/RegularSeasonDetailedResults.csv")
+ seeds <- read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/NCAATourneySeeds.csv")
+ teams <- read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/Teams.csv")
+ conf <- read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/TeamConferences.csv")
+ combo <- merge(conf, teams, by="TeamID")
+ coaches <- read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/TeamCoaches.csv")
+ combo <- merge(combo, coaches, by=c("TeamID", "Season"))
+ combo <- combo %>%
+   dplyr::select(-c(FirstDayNum, LastDayNum))
+```
+
+
+
+
+### Preprocessing
+
+This dataset is separated by winning team and losing team, but the goal of all of the proprocessing that follows is to get a dataset with the regular season averages (from that year) in all of a variety of statistics for each team in a given matchup. We want to randomly assign a team to be either "Team 1" or "Team 2" and have an equal balance of Team 1 wins and Team 2 wins (denoted by a 0 or a 1) in our final binary variable indicating which team won. We made sure not to include any actual data from the Kaggle NCAA tournament dataset itself because making predictions based on stats from the games we are trying to predict is pointless. 
+
+
+Making sure column names are coordinated in order to merge datasets.
+```{r}
+colnames(combo) <- c("WTeamID", "Season", "WConfAbbrev", "WTeamName", "WFirstD1Season", "WLastD1Season", "WCoachName")
+final <- merge(results,combo, by=c("WTeamID", "Season"))
+colnames(combo) <- c("LTeamID", "Season", "LConfAbbrev", "LTeamName", "LFirstD1Season", "LLastD1Season", "LCoachName")
+regular <- merge(final,combo, by=c("LTeamID", "Season"))
+regular <- na.omit(regular)
+```
+
+A mode function to use in next step.
+```{r}
+mode <- function(x) {
+  uniqx <- unique(na.omit(x))
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+```
+
+Summarizing all of the "losing" teams in the dataset by all the mean basketball stats in the dataset grouped by specific season that those stats came from.
+```{r}
+Lregular <- regular %>%
+ dplyr::select(-starts_with("W"))
+Lregular <- Lregular %>%
+ group_by(LTeamID, Season) %>%
+ summarise(mean_lscore = mean(LScore), mean_lfgm = mean(LFGM), mean_LFGA = mean(LFGA), mean_LFGM3 = mean(LFGM3),mean_LFGA3 = mean(LFGA3),mean_LFTM = mean(LFTM),mean_LFTA = mean(LFTA),mean_LOR = mean(LOR),mean_LDR = mean(LDR), mean_LAst = mean(LAst),mean_LTO = mean(LTO),mean_LStl = mean(LStl),mean_LBlk = mean(LBlk),mean_LPF = mean(LPF),mean_LConfAbbrev = mode(LConfAbbrev),mean_LTeamName = mode(LConfAbbrev),mean_LFirstD1Season = mean(LFirstD1Season),LLastD1Season = mean(LLastD1Season),mean_LCoachName = mode(LCoachName), LSample_Size=n())
+colnames(Lregular)[1] <- "TeamID"
+```
+
+Summarizing all of the "losing" teams in the dataset by all the mean basketball stats in the dataset grouped by specific season that those stats came from.
+```{r}
+Wregular <- regular %>%
+ dplyr::select(-starts_with("L"))
+Wregular <- Wregular %>%
+ group_by(WTeamID, Season) %>%
+ summarise(mean_Wscore = mean(WScore), mean_Wfgm = mean(WFGM), mean_WFGA = mean(WFGA), mean_WFGM3 = mean(WFGM3),mean_WFGA3 = mean(WFGA3),mean_WFTM = mean(WFTM),mean_WFTA = mean(WFTA),mean_WOR = mean(WOR),mean_WDR = mean(WDR), mean_WAst = mean(WAst),mean_WTO = mean(WTO),mean_WStl = mean(WStl),mean_WBlk = mean(WBlk),mean_WPF = mean(WPF),mean_WConfAbbrev = mode(WConfAbbrev), WTeamName = mode(WTeamName),mean_WFirstD1Season = mean(WFirstD1Season),mean_WLastD1Season = mean(WLastD1Season),mean_WCoachName = mode(WCoachName), WSample_Size=n())
+colnames(Wregular)[1] <- "TeamID"
+```
+
+Merging the winning and losing datasets to create one larger dataset. Next, taking a weighted average to get the final statistics for each team combining the sample size of both their wins and their losses from a given year in order to come up with that team's final average statistics from that year both home and away.
+
+```{r}
+regular <- merge(Wregular, Lregular, by = c("TeamID", "Season"))
+newregular<- matrix(0, 5474, 13)
+newregular <- as.data.frame(newregular)
+for (i in 3:16) {
+newregular[,i-2] <- ((regular$WSample_Size*regular[,i])+(regular$LSample_Size*regular[,i+20]))/
+           (regular$WSample_Size+regular$LSample_Size)
+colnames(newregular)[i-2] <- colnames(regular)[i]
+}
+regular <- regular %>%
+  dplyr::select(TeamID, Season, mean_WConfAbbrev, WTeamName, mean_WFirstD1Season, mean_WLastD1Season, mean_WCoachName, mean_WFirstD1Season, mean_WLastD1Season, WSample_Size, LSample_Size)
+regular <- cbind(regular, newregular)
+colnames(regular) <- c("TeamID", "Season", "ConfAbbrev", "TeamName", "FirstD1Season", "LastD1Season", "CoachName", "Wins", "Losses", "Mean_Score", "Mean_FGM", "Mean_FGA", "Mean_FGM3", "Mean_FGA3", "Mean_FTM", "Mean_FTA", "Mean_WOR", "Mean_WDR", "Mean_Ast", "Mean_TO", "Mean_Stl", "Mean_Blk", "Mean_PF")
+```
+
+
+Combining the tourney dataset with the regular season statistics dataset in order to get the actual NCAA tournament matchups that we want to be predicting. We also need to get rid of all of the statistics from each NCAA tournament game because we don't want to be predicting based on the actual statistics of the game.
+
+```{r}
+
+tourney<-read.csv("/Users/dangause/Desktop/senior_classes/spring_2020/stat_learning/homework/hw2/NCAATourneyDetailedResults.csv")
+
+labelvec <- colnames(regular)
+colnames(regular) <- paste("W",labelvec, sep="")
+colnames(regular)[2] <- "Season"
+tourney <- merge(tourney, regular, by=c("WTeamID", "Season"))
+colnames(regular) <- paste("L",labelvec, sep="")
+colnames(regular)[2] <- "Season"
+tourney <- merge(tourney, regular, by=c("LTeamID", "Season"))
+tourney <- tourney %>%
+  dplyr::select(-c(LCoachName,WCoachName, DayNum))
+tourney <- tourney[ ,-c(which(colnames(tourney)=="WLoc"):which(colnames(tourney)=="LPF"))]
+
+tourney <- tourney %>%
+  dplyr::select(-c( #LConfAbbrev, 
+                   LTeamName, 
+            LFirstD1Season, LLastD1Season))
+colnames(tourney)[c(1,3,4,5)] <- c("TeamID_L", "TeamID_W", "Score_W", "Score_L")
+tourney <- tourney[ ,-c((which(colnames(tourney)=="WConfAbbrev")+1):which(colnames(tourney)=="WLastD1Season"))]
+```
+
+One final problem is that the dataset is still in a "Winning Team" and "Losing Team" format. However, we want our model to predict randomly based a given Team 1 and Team 2, and our model will simply predict the winning team everytime if we don't adjust this. We cut the dataset in half (row-wise), switched the winning and losing teams and reattached the dataset here renaming the columns Team1 and Team2, so we have an equal distribution of Winning and Losing Teams (we will randomize row order later on). Finally, we mutated a new variable called WinTest that will be the binary variable we will predict on and represents whether Team 1 wins (and Team 2 loses) of Team 1 loses (and Team 2 wins).
+
+```{r}
+df2 <- tourney %>%
+  dplyr::select(TeamID_W, TeamID_L, Score_W, Score_L)
+colnames(df2) <- c("Team1", "Team2", "Team1Score", "Team2Score")
+df3 <- df2[round(nrow(df2)*.5,1):nrow(df2),]
+df2 <- df2[1:round(nrow(df2)*.5,1),]
+colnames(df3) <- c("Team2", "Team1", "Team2Score", "Team1Score")
+df4 <- rbind(df2, df3)
+tourney <- cbind(df4, tourney)
+ tourney <- tourney %>% 
+   mutate(WinTest = ifelse(Team1Score > Team2Score,1,0))
+```
+ 
+ 
+However, this means that we also have to switch the pattern of the average statistics for the bottom half of rows of this dataset that we flipped the teams of. This is because certain column need to correspond to "Team 1" statistics and certain column need to correspond only to "Team 2" statistics so that the model can make effective predictions. We put the dataset in random order with the sample function and there is an equal distribution of 1's and 0's in our WinTest variable. Lastly, we just changed the names of each column to reflect "Team 1" and "Team 2" rather than winning and losing team to keep clear to us which features we were using. This was not the most efficient or quickest way to preprocess this dataset, but it worked in the end.
+
+```{r}
+L.df <-  tourney %>%
+  dplyr::select(starts_with("L"), starts_with("W"))
+L.df2 <- L.df[round(nrow(L.df)*.5,1):nrow(L.df),]
+L.df3 <- L.df[1:round(nrow(L.df)*.5,1),]
+for (i in 1:17) {
+    if (startsWith(colnames(L.df2)[i], "L")) {
+    colnames(L.df2)[i] <- sub(".", "", colnames(L.df2)[i])
+    colnames(L.df2)[i] <- paste("W",colnames(L.df2)[i], sep="")
+  }
+}
+for (i in 18:34) {
+    if (startsWith(colnames(L.df2)[i], "W")) {
+    
+    colnames(L.df2)[i] <- sub(".", "", colnames(L.df2)[i])
+    colnames(L.df2)[i] <- paste("L",colnames(L.df2)[i], sep="")
+    }
+}
+L.df2 <- rbind(L.df3, L.df2) 
+tourney <- tourney[ ,-c(which(colnames(tourney)=="Score_W"):which(colnames(tourney)=="LMean_PF"))]
+tourney <- cbind(tourney, L.df2)
+tourney <- tourney[sample(nrow(tourney)),]
+for (i in 1:length(colnames(tourney))) {
+    if (startsWith(colnames(tourney)[i], "W")) {
+    colnames(tourney)[i] <- sub(".", "", colnames(tourney)[i])
+    colnames(tourney)[i] <- paste("Team1",colnames(tourney)[i], sep="")
+    }
+    if (startsWith(colnames(tourney)[i], "L")) {
+    colnames(tourney)[i] <- sub(".", "", colnames(tourney)[i])
+    colnames(tourney)[i] <- paste("Team2",colnames(tourney)[i], sep="")
+  }
+}
+colnames(tourney)[length(colnames(tourney))] <- "WinTest"
+```
+
+
+### Predictive Models
+
+Taking the columns we want to predict on and then splitting the dataset into train and test sets with a standard 80% to 20% split. Since the data is in random order, we can separate by first 80% of the dataset and use the second 20% for testing.
+
+```{r}
+tourney <- tourney %>%
+  filter(Team1Wins < 40)
+tourney.updated2 <- tourney[,10:43]
+tourney.updated2 <- tourney.updated2 %>%
+  dplyr::select(-c(Team1ConfAbbrev))
+train.data <- tourney.updated2[1:(.8*nrow(tourney.updated2)),]
+test.data <- tourney.updated2[(.8*nrow(tourney.updated2)):nrow(tourney.updated2),]
+```
+
+
+### LDA Model
+
+```{r, warning=FALSE}
+tourney.lda <- lda(WinTest ~ .,
+                  data = train.data)
+pred.updated <- predict(tourney.lda, test.data)$class
+lda.accuracy <- sum(pred.updated == test.data$WinTest) / length(pred.updated)
+```
+
+Our final accuracy value for our LDA model was `r lda.accuracy`, which I think is a decent result given that predicting each game prediction completely by chance would give you around a 50% accuracy value.
+
+
+### LDA Visualization
+
+#### Overall wins LDA prediction
+```{r}
+new.tourney2 <- data.frame(test.data, pred.updated)
+new.tourney2 %>%
+  ggplot(aes(x=Team1Wins, y=Team2Wins)) +
+  geom_point(aes(color = pred.updated)) + scale_color_discrete(name= "LDA Prediction", labels = c("Team 1 Win", "Team 2 Win"))  + theme_classic() 
+```
+
+Visualization of Team 1 Wins vs and Team 2 Losses based on LDA. There is a general linear splitting between these two variables. Our LDA model usually predicts that the team with more wins will generally win. 
+
+#### Team mean score LDA prediction
+```{r}
+new.tourney2 <- data.frame(test.data, pred.updated)
+new.tourney2 %>%
+  ggplot(aes(x=Team1Mean_Score, y=Team2Mean_Score)) +
+  geom_point(aes(color = pred.updated)) + scale_color_discrete(name= "LDA Prediction", labels = c("Team 1 Win", "Team 2 Win"))  + theme_classic() 
+```
+
+Here, we can see that the team mean score has less impact on our LDA model. The team win prediction doesn't have any clear relationship to the mean score data.
+
+
+### GLM Model
+
+```{r, warning=FALSE}
+tourney.glm <- glm(factor(WinTest) ~ .,
+               data = train.data,
+               family = "binomial")
+preds.glm <- predict.glm(tourney.glm,
+                         test.data,
+                         type = "response")
+start <- .8*length(tourney$Team2ConfAbbrev)
+finish <- length(tourney$Team1ConfAbbrev)
+preds.frame <- data.frame(test.data, preds.glm, tourney$Team2ConfAbbrev[start:finish], tourney$Team1ConfAbbrev[start:finish])
+colnames(preds.frame)[35:36] <- c("Team2Conf", "Team1Conf")
+glm.accuracy <- sum(round(preds.glm) == test.data$WinTest) / length(preds.glm)
+```
+
+Our final accuracy value for our GLM model was `r glm.accuracy`.
+
+
+### GLM Visualizations
+
+```{r}
+preds.frame %>%
+  ggplot(aes(x = Team1Wins,
+             y = preds.glm)) +
+  geom_point() +
+  geom_smooth(method = "lm") + theme_classic()
+```
+
+### Team Win Prediction by NCAA Conference
+
+```{r}
+preds.frame %>%
+  group_by(Team1Conf) %>%
+  summarise(mean_pred = mean(preds.glm)) %>%
+  ggplot(aes(x=reorder(Team1Conf, mean_pred), y=mean_pred)) + geom_bar(stat="identity", color="black", fill="blue") + coord_flip() + theme_classic() + ylab("mean team win prediction") + xlab("conference") 
+```
+
+This graph visualizes the relationship between NCAA conference and our GLM team win prediction. We can see that some conferences are much stronger than others, agreeing with NCAA basketball characteristics.
+
+
+
+
+### Overall wins GLM prediction
+```{r}
+preds.frame$preds.glm <- as.factor(round(preds.frame$preds.glm))
+preds.frame %>%
+  ggplot(aes(x=Team1Wins, y=Team2Wins)) + geom_point(aes(color=factor(preds.glm))) + scale_color_discrete(name= "GLM Prediction", labels = c("Team 1 Win", "Team 2 Win"))  + theme_classic() 
+```
+
+From this visualization we can see that there is a significant relationship between the overall team wins and our GLM win prediction. This is a similar relationship to our LDA prediction, though perhaps there is less weight than in the LDA prediction.
+
+
+### Team mean score GLM Prediction
+```{r}
+preds.frame %>%
+  ggplot(aes(x=Team1Mean_Score, y=Team2Mean_Score)) + geom_point(aes(color=factor(preds.glm))) + scale_color_discrete(name= "GLM Prediction", labels = c("Team 1 Win", "Team 2 Win"))  + theme_classic() 
+```
+
+Such as with our LDA prediction, team mean score does not have a significant relationship in our GLM model prediction. 
+
+
+
+
+
+
+
+### Comparison of Models
+The two models are very similar in accuracy, correctly predicting match-ups around 68% of the time. With a percentage this high, one could use these models with good confidence. Based on our visualizations, team wins has a high weight in predicting the outcome of a match-up. We know this based on the linearity of the graphs. Mean score on the other hand does not give a clear distinction, as the graph shows a scattered mix with no obvious trend. 
+
+
+<!-- ### Saving Models -->
+
+<!-- ```{r} -->
+<!-- save(tourney.glm, file='/Users/jacobellen/desktop/tourney.glm.rda') #update path for each person -->
+<!-- save(tourney.lda, file='/Users/jacobellen/desktop/tourney.lda.rda') -->
+<!-- ``` -->
